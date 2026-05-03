@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>台語除魔錄：大頭萌神完整版</title>
+    <style>
+        body { 
+            background: #111; color: #fff; font-family: 'Noto Sans TC', sans-serif;
+            display: flex; flex-direction: column; align-items: center; margin: 0; padding: 20px;
+            user-select: none;
+        }
+        
+        #game-container {
+            width: 600px; height: 600px; position: relative;
+            border: 8px solid #3b3a36; border-radius: 4px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.9); overflow: hidden;
+            background: #222;
+        }
+
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(17, 17, 17, 0.95); z-index: 200; text-align: center;
+        }
+        
+        #end-screen {
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(2px);
+        }
+
+        .screen h1 { color: #f1c40f; font-size: 48px; text-shadow: 3px 3px #000; margin-bottom: 10px; }
+        .screen p { font-size: 18px; color: #ccc; margin-bottom: 30px; line-height: 1.6; }
+        
+        .main-btn {
+            padding: 15px 40px; background: #0984e3; border: 4px solid #fff; border-radius: 8px;
+            color: #fff; font-size: 24px; font-weight: bold; cursor: pointer; transition: 0.2s; margin: 5px;
+        }
+        .main-btn:hover { background: #fff; color: #000; transform: scale(1.05); }
+
+        #status-bar { 
+            width: 600px; display: none; justify-content: space-between;
+            margin-bottom: 10px; font-size: 18px; font-weight: bold; 
+            background: #333; padding: 10px 20px; border-radius: 8px; box-sizing: border-box;
+        }
+        canvas { display: block; image-rendering: pixelated; }
+        
+        #dialog {
+            position: absolute; top: 20%; left: 10%; width: 80%;
+            background: rgba(0, 0, 0, 0.95); border: 4px solid #f1c40f;
+            padding: 20px; display: none; z-index: 250; border-radius: 8px;
+            text-align: center; box-sizing: border-box;
+        }
+        .ans-btn { 
+            padding: 10px 15px; background: #2c3e50; border: 2px solid #fff; 
+            color: white; cursor: pointer; font-weight: bold; margin: 5px; border-radius: 4px;
+            font-size: 18px; transition: 0.1s; display: inline-block;
+        }
+        .ans-btn:hover { background: #f1c40f; color: #000; }
+        
+        #flash-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: white; opacity: 0; pointer-events: none; z-index: 150;
+            transition: opacity 1s;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status-bar">
+        <span style="color: #ff5252;">❤️ 生命值: <span id="hp">100</span></span>
+        <span style="color: #69f0ae;">🗺️ <span id="lvl-name">第一關</span></span>
+        <span id="target-hint" style="color: #f1c40f;">逃往 ⭐</span>
+    </div>
+
+    <div id="game-container">
+        <div id="start-screen" class="screen">
+            <h1>🏮 台語除魔錄 🏮</h1>
+            <p>🎵 <b>開啟聲音，享受復古配樂！</b> 🎵<br><br>
+            化身為可愛大頭勇者，在迷宮中躲避魔物。<br>
+            答對不重複的台語題來拆除 <b>🌵陷阱</b>。<br>
+            傳說在宇宙的盡頭，有一位神明在等待著你...</p>
+            <button class="main-btn" onclick="startGame()">展開冒險</button>
+        </div>
+
+        <div id="end-screen" class="screen" style="display: none;">
+            <h1 id="end-title">遊戲結束</h1>
+            <p id="end-desc">你被怪物抓走了...</p>
+            <button class="main-btn" onclick="location.reload()">再玩一次</button>
+        </div>
+
+        <canvas id="gameCanvas" width="600" height="600" style="display: none;"></canvas>
+        <div id="flash-overlay"></div>
+        <div id="dialog">
+            <div id="dialog-text" style="font-size: 20px; margin-bottom: 20px; line-height: 1.5;"></div>
+            <div id="options"></div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. 8-bit 音效引擎
+        // ==========================================
+        let audioCtx, bgmInterval;
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            startBGM();
+        }
+        function playTone(freq, type, duration, vol=0.1) {
+            if (!audioCtx) return;
+            let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+            osc.type = type; osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            osc.start(); osc.stop(audioCtx.currentTime + duration);
+        }
+        function startBGM() {
+            const melody = [196, 261.6, 329.6, 261.6, 196, 329.6, 392, 329.6]; 
+            let step = 0;
+            bgmInterval = setInterval(() => {
+                if(gameState !== 'PLAYING' && gameState !== 'CORONATION' && gameState !== 'VICTORY_IDLE') return; 
+                playTone(melody[step % melody.length] / 2, 'square', 0.2, 0.05);
+                step++;
+            }, 250);
+        }
+        function sfxStep() { playTone(100, 'triangle', 0.1, 0.05); } 
+        function sfxCorrect() { playTone(523.25, 'square', 0.1, 0.1); setTimeout(() => playTone(659.25, 'square', 0.2, 0.1), 100); }
+        function sfxWrong() { playTone(150, 'sawtooth', 0.3, 0.1); }
+        function sfxWin() { [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => { setTimeout(() => playTone(freq, 'square', 0.15, 0.1), i * 150); }); }
+        function sfxHeartCrack() { playTone(200, 'sawtooth', 0.2, 0.2); }
+        function sfxHeartShatter() { playTone(100, 'square', 0.5, 0.3); setTimeout(() => playTone(50, 'sawtooth', 0.6, 0.3), 50); }
+        function sfxTransform() { [440, 554.37, 659.25, 880, 1108.73].forEach((freq, i) => { setTimeout(() => playTone(freq, 'sine', 0.5, 0.1), i * 100); }); }
+
+        // ==========================================
+        // 2. 遊戲美術與極致效能快取設定
+        // ==========================================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const GRID = 40; const COLS = 15, ROWS = 15;
+
+        // 【最終調色盤】大頭主角 + 專屬神明顏色
+        const pal = { 
+            '0': 'transparent', 
+            '1': '#111111', '2': '#ffda79', '4': '#4b4b4b', '5': '#717171', 
+            '6': '#ff7979', '7': '#341f97', '8': '#ffffff',
+            'c': '#f1c40f', 'C': '#192a56', 'S': '#00ffff', 'w': '#ffffff',
+            'A': '#2c1212', 'B': '#5c2a2a', 'E': '#e74c3c',
+            'F': '#ffdfc4', 'W': '#ffffff', 'R': '#d63031' // 神明專屬色
+        };
+
+        const playerArt = [
+            "0000444444440000",
+            "0004555555554000",
+            "0045555555555400",
+            "0445555555555440",
+            "0455544444455540",
+            "0444222222224440",
+            "0042222222222400",
+            "0022118221182200", 
+            "0022171221712200", 
+            "0026222222226200", 
+            "0022222112222200", 
+            "0002222222222000",
+            "0000222222220000",
+            "0000000000000000",
+            "0000000000000000",
+            "0000000000000000"
+        ];
+        
+        const playerArtStar = [
+            "0000000c00000000",
+            "000000ccc0000000", 
+            "00000ccccc000000",
+            "000000ccc0000000",
+            "0000CCCCCCCC0000", 
+            "000CCCCCCCCCC000",
+            "00CC22222222CC00",
+            "0CC22118221182CC",
+            "0CC22171221712CC",
+            "0CC62222222262CC",
+            "00CC2222112222CC",
+            "000C222222222C00",
+            "00S0C2222222C0S0", 
+            "00000CCCCCCC0000",
+            "0000S00000S00000",
+            "0000000000000000"
+        ];
+
+        const heartArt = [
+            "0000000000000000", "0000EEE00EEE0000", "000EEEEEEEEEEE00", "000EEEEEEEEEEE00",
+            "0000EEEEEEEE0000", "00000EEEEEE00000", "000000EEEE000000", "0000000EE0000000",
+            "0000000000000000", "0000000000000000", "0000000000000000", "0000000000000000",
+            "0000000000000000", "0000000000000000", "0000000000000000", "0000000000000000"
+        ];
+        
+        const heartCrackArt = [
+            "0000000000000000", "0000EEE00EEE0000", "000EEE1EEEEEEE00", "000EEEE1EEEEEE00",
+            "0000EE1EEEEE0000", "00000EE1EEE00000", "000000E1EE000000", "0000000EE0000000",
+            "0000000000000000", "0000000000000000", "0000000000000000", "0000000000000000",
+            "0000000000000000", "0000000000000000", "0000000000000000", "0000000000000000"
+        ];
+
+        // 恢復威嚴白鬍子神明
+        const bossArt = [
+            "00000cccc0000000", 
+            "0000RRRRRR000000", 
+            "000RRRRRRRRR0000", 
+            "000F1FFFF1F00c00",
+            "000FFFFFFFF00c00", 
+            "0000FWWWWF000c00", 
+            "000RWWWWWW000c00", 
+            "00RRWWWWWWWR00c00",
+            "0RRRRWWWWRRR0c00", 
+            "cRRRRWWWWRRRcc00", 
+            "cRRRRRRRRRRRcc00", 
+            "00RRRRRRRRRR0c00",
+            "00RRRRRRRRRR0c00", 
+            "0000110011000000", 
+            "0000110011000000", 
+            "0000000000000000"
+        ];
+
+        const wallArt = [
+            "AAAAAAAAAAAAAAAA", "BBBBBBBABBBBBBBB", "BBBBBBBABBBBBBBB", "BBBBBBBABBBBBBBB",
+            "AAAAAAAAAAAAAAAA", "BBBABBBBBBBBBBBB", "BBBABBBBBBBBBBBB", "BBBABBBBBBBBBBBB",
+            "AAAAAAAAAAAAAAAA", "BBBBBBBABBBBBBBB", "BBBBBBBABBBBBBBB", "BBBBBBBABBBBBBBB",
+            "AAAAAAAAAAAAAAAA", "BBBABBBBBBBBBBBB", "BBBABBBBBBBBBBBB", "BBBABBBBBBBBBBBB"
+        ];
+
+        const spriteCache = {};
+        function createCache(name, artArray, sizeGrid = 1) {
+            let offCanvas = document.createElement('canvas');
+            let scale = (GRID * sizeGrid) / 16;
+            offCanvas.width = 16 * scale; offCanvas.height = 16 * scale;
+            let offCtx = offCanvas.getContext('2d');
+            for (let r = 0; r < 16; r++) {
+                for (let c = 0; c < 16; c++) {
+                    let colorCode = artArray[r][c];
+                    if (colorCode !== '0') {
+                        offCtx.fillStyle = pal[colorCode];
+                        offCtx.fillRect(c * scale, r * scale, scale + 0.5, scale + 0.5);
+                    }
+                }
+            }
+            spriteCache[name] = offCanvas;
+        }
+
+        createCache('player', playerArt);
+        createCache('playerStar', playerArtStar);
+        createCache('heart', heartArt);
+        createCache('heartCrack', heartCrackArt);
+        createCache('wall', wallArt);
+        createCache('boss', bossArt, 3); 
+
+        function drawSprite(name, x, y) {
+            ctx.drawImage(spriteCache[name], x * GRID, y * GRID);
+        }
+
+        // ==========================================
+        // 3. 遊戲狀態與變數
+        // ==========================================
+        let gameState = 'START'; 
+        let player = { x: 1, y: 1, hp: 100 };
+        let activeEvent = null; let turnCount = 0; let currentLvl = 0; 
+        
+        let starMap = []; let shootingStars = []; 
+        let deathTimer = 0; let deathPhase = 0; let deathParticles = []; 
+        let coronaTimer = 0; let animalSpirits = []; let goldenLightAlpha = 0; let isTransformed = false;
+
+        const masterQuestions = [
+            { zh: "蘋果", taigi: "Phōng-kó", wrong1: "Kam-á", wrong2: "Pa̍t-á" },
+            { zh: "香蕉", taigi: "Kin-tsio", wrong1: "Ông-lâi", wrong2: "Si-kue" },
+            { zh: "西瓜", taigi: "Si-kue", wrong1: "Phōng-kó", wrong2: "Kam-á" },
+            { zh: "腳踏車", taigi: "Kha-ta̍h-tshia", wrong1: "Bia̍t-tshia", wrong2: "Hué-tshia" },
+            { zh: "便當", taigi: "Piān-tong", wrong1: "Mī", wrong2: "Pn̄g" },
+            { zh: "魚", taigi: "Hî", wrong1: "Gû", wrong2: "Ti" },
+            { zh: "醫生", taigi: "I-sing", wrong1: "Thâu-ke", wrong2: "Hák-sing" },
+            { zh: "警察", taigi: "Kíng-tshat", wrong1: "Lāu-su", wrong2: "I-sing" },
+            { zh: "糖果", taigi: "Thn̂g-á", wrong1: "Bī-sòo", wrong2: "Píng-kuann" },
+            { zh: "飛機", taigi: "Fe-ki", wrong1: "Hué-tshia", wrong2: "Lûn-tsûn" },
+            { zh: "老師", taigi: "Lāu-su", wrong1: "Kíng-tshat", wrong2: "Sing-lí-lâng" },
+            { zh: "星期一", taigi: "Pài-it", wrong1: "Pài-nn̄g", wrong2: "Pài-sann" }
+        ];
+        let availableQuestions = [...masterQuestions];
+
+        const levels = [
+            {
+                name: "第一關：三合院", bgDark: "#1a1a1a", bgLight: "#222", isGalaxy: false,
+                pStart: {x: 1, y: 1}, exit: {x: 7, y: 7},
+                monsters: [
+                    { x: 13, y: 13, startX: 13, startY: 13, emoji: "🐶", zh: "狗", taigi: "Káu", wrong1: "Niau", wrong2: "Tsiáu" },
+                    { x: 1, y: 13, startX: 1, startY: 13, emoji: "🐱", zh: "貓", taigi: "Niau", wrong1: "Káu", wrong2: "Tsuí-ke" },
+                    { x: 13, y: 1, startX: 13, startY: 1, emoji: "🐷", zh: "豬", taigi: "Ti", wrong1: "Gû", wrong2: "Bé" }
+                ],
+                map: [
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                    [1,0,1,1,1,2,1,1,1,2,1,1,1,0,1], [1,0,1,0,0,0,0,0,0,0,0,0,1,0,1],
+                    [1,0,1,0,1,1,1,2,1,1,1,0,1,0,1], [1,0,2,0,1,0,0,0,0,0,1,0,2,0,1],
+                    [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1], [1,0,1,0,2,0,0,0,0,0,2,0,1,0,1], 
+                    [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1], [1,0,2,0,1,0,0,0,0,0,1,0,2,0,1],
+                    [1,0,1,0,1,1,1,2,1,1,1,0,1,0,1], [1,0,1,0,0,0,0,0,0,0,0,0,1,0,1],
+                    [1,0,1,1,1,2,1,1,1,2,1,1,1,0,1], [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+                ]
+            },
+            {
+                name: "第二關：老街", bgDark: "#3a1a1a", bgLight: "#4a2a2a", isGalaxy: false,
+                pStart: {x: 1, y: 1}, exit: {x: 13, y: 13},
+                monsters: [
+                    { x: 13, y: 1, startX: 13, startY: 1, emoji: "🐸", zh: "青蛙", taigi: "Tsuí-ke", wrong1: "Tsiáu", wrong2: "Kâu" },
+                    { x: 1, y: 13, startX: 1, startY: 13, emoji: "🐒", zh: "猴子", taigi: "Kâu", wrong1: "Bé", wrong2: "Ti" },
+                    { x: 7, y: 7, startX: 7, startY: 7, emoji: "🐦", zh: "鳥", taigi: "Tsiáu", wrong1: "Niau", wrong2: "Káu" }
+                ],
+                map: [
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], [1,0,0,0,1,0,0,0,1,0,0,0,0,0,1],
+                    [1,0,1,0,1,0,1,0,1,0,1,1,1,0,1], [1,0,1,0,2,0,1,0,2,0,1,0,0,0,1],
+                    [1,0,1,1,1,1,1,1,1,1,1,0,1,1,1], [1,0,0,0,0,0,0,0,0,0,0,0,1,0,1],
+                    [1,1,1,1,1,2,1,1,1,1,1,1,1,0,1], [1,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
+                    [1,0,1,1,1,1,1,0,1,1,1,2,1,1,1], [1,0,1,0,0,0,0,0,1,0,0,0,0,0,1],
+                    [1,0,1,0,1,1,1,1,1,0,1,1,1,0,1], [1,0,2,0,1,0,0,0,2,0,1,0,1,0,1],
+                    [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1], [1,0,0,0,1,0,0,0,1,0,0,0,1,0,1],
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+                ]
+            },
+            {
+                name: "最終關：銀河 (Gîn-hô)", bgDark: "#100a26", bgLight: "#181038", isGalaxy: true,
+                pStart: {x: 7, y: 13}, exit: {x: -1, y: -1},
+                monsters: [], bossZone: {x: 6, y: 1, w: 3, h: 3}, 
+                map: [
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,1,1,1,0,0,0,1,1,1,0,0,0], [0,0,1,0,0,0,0,0,0,0,0,0,1,0,0],
+                    [0,1,0,0,2,0,0,0,0,0,2,0,0,1,0], [0,1,0,0,0,0,0,0,0,0,0,0,0,1,0],
+                    [0,1,0,2,0,0,0,0,0,0,0,2,0,1,0], [0,1,0,0,0,0,0,2,0,0,0,0,0,1,0],
+                    [0,0,1,0,0,0,0,0,0,0,0,0,1,0,0], [0,0,0,1,1,0,0,0,0,0,1,1,0,0,0],
+                    [0,0,0,0,0,1,0,0,0,1,0,0,0,0,0], [0,0,0,0,0,0,1,0,1,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+                ]
+            }
+        ];
+
+        // ==========================================
+        // 4. 動畫迴圈 (解除封印，60 FPS)
+        // ==========================================
+        window.startGame = function() {
+            initAudio(); 
+            isTransformed = false;
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('status-bar').style.display = 'flex';
+            canvas.style.display = 'block';
+            player.hp = 100; currentLvl = 0; turnCount = 0;
+            availableQuestions = [...masterQuestions]; 
+            loadLevel();
+            requestAnimationFrame(animationLoop); 
+        }
+
+        function generateStars() {
+            starMap = [];
+            for(let i=0; i<60; i++) {
+                starMap.push({
+                    x: Math.random() * 600, y: Math.random() * 600,
+                    size: Math.random() > 0.8 ? 3 : 2,
+                    speed: Math.random() * 0.5 + 0.2, 
+                    color: ['#ffffff', '#00ffff', '#ff00ff', '#f1c40f'][Math.floor(Math.random()*4)]
+                });
+            }
+        }
+
+        function triggerDeath() {
+            gameState = 'DYING'; clearInterval(bgmInterval);
+            deathPhase = 0; deathTimer = Date.now();
+        }
+
+        function triggerCoronation() {
+            gameState = 'CORONATION'; player.x = 7; player.y = 7;
+            coronaTimer = Date.now();
+            animalSpirits = [
+                { angle: 0,               r: 90, speed: 0.015, emoji: "🐶" },
+                { angle: Math.PI*2/5,     r: 90, speed: 0.015, emoji: "🐱" },
+                { angle: Math.PI*4/5,     r: 90, speed: 0.015, emoji: "🐷" },
+                { angle: Math.PI*6/5,     r: 90, speed: 0.015, emoji: "🐸" },
+                { angle: Math.PI*8/5,     r: 90, speed: 0.015, emoji: "🐒" }
+            ];
+            goldenLightAlpha = 0;
+        }
+
+        function animationLoop() {
+            if(gameState === 'PLAYING' || gameState === 'DYING' || gameState === 'CORONATION' || gameState === 'VICTORY_IDLE') {
+                drawGame();
+            }
+            requestAnimationFrame(animationLoop);
+        }
+
+        function loadLevel() {
+            let lvl = levels[currentLvl];
+            player.x = lvl.pStart.x; player.y = lvl.pStart.y;
+            lvl.monsters.forEach(m => { m.x = m.startX; m.y = m.startY; });
+            
+            if(lvl.isGalaxy) {
+                generateStars(); document.getElementById('target-hint').innerText = "朝見神明";
+            } else {
+                document.getElementById('target-hint').innerText = "逃往 ⭐";
+            }
+
+            document.getElementById('lvl-name').innerText = lvl.name;
+            document.getElementById('hp').innerText = player.hp;
+            gameState = 'PLAYING';
+        }
+
+        function drawGame() {
+            let lvl = levels[currentLvl];
+            ctx.clearRect(0, 0, 600, 600);
+
+            for(let y=0; y<ROWS; y++){
+                for(let x=0; x<COLS; x++){
+                    if(!lvl.isGalaxy) {
+                        ctx.fillStyle = (x+y)%2 === 0 ? lvl.bgDark : lvl.bgLight;
+                        ctx.fillRect(x*GRID, y*GRID, GRID, GRID);
+                    } else {
+                        ctx.fillStyle = lvl.bgDark; ctx.fillRect(x*GRID, y*GRID, GRID, GRID);
+                    }
+                }
+            }
+
+            if(lvl.isGalaxy) {
+                starMap.forEach(s => {
+                    s.y += s.speed; 
+                    if(s.y > 600) { s.y = -10; s.x = Math.random() * 600; } 
+                    ctx.fillStyle = s.color; ctx.fillRect(s.x, s.y, s.size, s.size);
+                });
+
+                if(Math.random() < 0.02 && shootingStars.length < 2) {
+                    shootingStars.push({ x: Math.random()*600, y: -50, vx: -5, vy: 10, life: 1.0 });
+                }
+                for(let i = shootingStars.length - 1; i >= 0; i--) {
+                    let star = shootingStars[i];
+                    star.x += star.vx; star.y += star.vy;
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath(); ctx.arc(star.x, star.y, 2, 0, Math.PI*2); ctx.fill();
+                    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(star.x, star.y); ctx.lineTo(star.x - star.vx*3, star.y - star.vy*3); ctx.stroke();
+                    if(star.y > 600 || star.x < 0) shootingStars.splice(i, 1);
+                }
+            }
+
+            if (gameState === 'PLAYING' || gameState === 'DYING') {
+                for(let y=0; y<ROWS; y++){
+                    for(let x=0; x<COLS; x++){
+                        if(lvl.map[y][x] === 1 && !lvl.isGalaxy) drawSprite('wall', x, y);
+                        if(lvl.map[y][x] === 1 && lvl.isGalaxy) {
+                            ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x*GRID+10, y*GRID+10, 20, 20);
+                        }
+                        if(lvl.map[y][x] === 2) {
+                            ctx.font = "24px Arial"; ctx.fillText("🌵", x*GRID+8, y*GRID+30);
+                        }
+                    }
+                }
+                if(!lvl.isGalaxy) {
+                    ctx.font = "28px Arial"; ctx.fillText("⭐", lvl.exit.x*GRID+6, lvl.exit.y*GRID+32);
+                    lvl.monsters.forEach(m => { ctx.font = "30px Arial"; ctx.fillText(m.emoji, m.x*GRID+5, m.y*GRID+34); });
+                } else {
+                    drawSprite('boss', lvl.bossZone.x, lvl.bossZone.y);
+                }
+            }
+
+            if (gameState === 'PLAYING') {
+                drawSprite(isTransformed ? 'playerStar' : 'player', player.x, player.y);
+            } 
+            else if (gameState === 'DYING') {
+                ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 0, 600, 600);
+                let now = Date.now(); let dt = now - deathTimer;
+                if(deathPhase === 0) { 
+                    drawSprite('heart', player.x, player.y);
+                    if(dt > 1000) { deathPhase = 1; deathTimer = now; sfxHeartCrack(); }
+                } else if (deathPhase === 1) { 
+                    drawSprite('heartCrack', player.x, player.y);
+                    if(dt > 1000) {
+                        deathPhase = 2; deathTimer = now; sfxHeartShatter(); deathParticles = [];
+                        for(let i=0; i<30; i++) { 
+                            deathParticles.push({
+                                x: player.x * GRID + GRID/2, y: player.y * GRID + GRID/2,
+                                vx: (Math.random() - 0.5) * 10, vy: (Math.random() - 0.5) * 10 - 2, life: 1.0
+                            });
+                        }
+                    }
+                } else if (deathPhase === 2) { 
+                    deathParticles.forEach(p => {
+                        p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life -= 0.01; 
+                        if (p.life > 0) { ctx.fillStyle = '#e74c3c'; ctx.fillRect(p.x, p.y, 6, 6); }
+                    });
+                    if(dt > 2500) showEndScreen(false);
+                }
+            }
+            else if (gameState === 'CORONATION' || gameState === 'VICTORY_IDLE') {
+                drawSprite('boss', 6, 1);
+                drawSprite(isTransformed ? 'playerStar' : 'player', player.x, player.y);
+                let now = Date.now(); let dt = now - coronaTimer;
+                
+                animalSpirits.forEach(s => {
+                    s.angle += s.speed;
+                    let px = player.x * GRID + 10 + Math.cos(s.angle) * s.r;
+                    let py = player.y * GRID + 10 + Math.sin(s.angle) * s.r;
+                    ctx.font = "24px Arial"; ctx.globalAlpha = 0.9;
+                    ctx.fillText(s.emoji, px, py); ctx.globalAlpha = 1.0;
+                });
+
+                if (gameState === 'CORONATION' && dt > 2000) {
+                    if (goldenLightAlpha < 0.5) goldenLightAlpha += 0.01;
+                    ctx.fillStyle = `rgba(241, 196, 15, ${goldenLightAlpha})`;
+                    ctx.fillRect(player.x * GRID - 20, 0, GRID + 40, player.y * GRID + GRID);
+                }
+
+                if (gameState === 'CORONATION' && dt > 3500 && !document.getElementById('dialog').style.display.includes('block') && !isTransformed) {
+                    const dialog = document.getElementById('dialog'); dialog.style.display = 'block';
+                    document.getElementById('dialog-text').innerHTML = 
+                        `<span style="color:#f1c40f">【太歲星君】</span> 降下金光：<br><br>
+                        「你疼惜眾生，遮的星仔攏是你善心的證明。<br>這領『星光衫』送你。」`;
+                    document.getElementById('options').innerHTML = `<button class="ans-btn" style="background:#0984e3" onclick="acceptStarlight()">接受星光加冕</button>`;
+                }
+            }
+        }
+
+        window.addEventListener('keydown', e => {
+            if(gameState !== 'PLAYING') return;
+            let dx=0, dy=0; const key = e.key.toLowerCase();
+            if(key === 'arrowup' || key === 'w') dy=-1;
+            if(key === 'arrowdown' || key === 's') dy=1;
+            if(key === 'arrowleft' || key === 'a') dx=-1;
+            if(key === 'arrowright' || key === 'd') dx=1;
+            if(dx === 0 && dy === 0) return;
+
+            let nx = player.x + dx; let ny = player.y + dy; let lvl = levels[currentLvl];
+
+            if(lvl.map[ny][nx] !== 1) {
+                let oldX = player.x, oldY = player.y; player.x = nx; player.y = ny; sfxStep(); 
+
+                if(lvl.map[ny][nx] === 2) { startTrapEvent(nx, ny, oldX, oldY); return; }
+
+                if(lvl.isGalaxy) {
+                    if(player.x >= lvl.bossZone.x && player.x < lvl.bossZone.x + 3 && player.y >= lvl.bossZone.y && player.y < lvl.bossZone.y + 3) {
+                        startBossEvent(); return;
+                    }
+                } else {
+                    turnCount++;
+                    if(turnCount % 2 === 0) {
+                        lvl.monsters.forEach(chaser => {
+                            let cx = player.x - chaser.x; let cy = player.y - chaser.y; let possibleMoves = [];
+                            if (Math.abs(cx) > Math.abs(cy)) {
+                                if (cx > 0 && lvl.map[chaser.y][chaser.x + 1] !== 1) possibleMoves.push({x: 1, y: 0}); 
+                                if (cx < 0 && lvl.map[chaser.y][chaser.x - 1] !== 1) possibleMoves.push({x: -1, y: 0});
+                                if (cy > 0 && lvl.map[chaser.y + 1][chaser.x] !== 1) possibleMoves.push({x: 0, y: 1}); 
+                                if (cy < 0 && lvl.map[chaser.y - 1][chaser.x] !== 1) possibleMoves.push({x: 0, y: -1});
+                            } else {
+                                if (cy > 0 && lvl.map[chaser.y + 1][chaser.x] !== 1) possibleMoves.push({x: 0, y: 1});
+                                if (cy < 0 && lvl.map[chaser.y - 1][chaser.x] !== 1) possibleMoves.push({x: 0, y: -1});
+                                if (cx > 0 && lvl.map[chaser.y][chaser.x + 1] !== 1) possibleMoves.push({x: 1, y: 0});
+                                if (cx < 0 && lvl.map[chaser.y][chaser.x - 1] !== 1) possibleMoves.push({x: -1, y: 0});
+                            }
+                            if (possibleMoves.length > 0) { chaser.x += possibleMoves[0].x; chaser.y += possibleMoves[0].y; }
+                        });
+                    }
+
+                    if(player.x === lvl.exit.x && player.y === lvl.exit.y) {
+                        gameState = 'DIALOG'; sfxWin(); 
+                        alert("🎉 過關！準備前往下一區！ (生命值恢復 30)");
+                        player.hp = Math.min(100, player.hp + 30); currentLvl++; loadLevel(); return;
+                    }
+                    let caughtBy = lvl.monsters.find(m => m.x === player.x && m.y === player.y);
+                    if(caughtBy) startMonsterBattle(caughtBy);
+                }
+            }
+        });
+
+        function startTrapEvent(tx, ty, px, py) {
+            gameState = 'DIALOG';
+            if (availableQuestions.length === 0) availableQuestions = [...masterQuestions];
+            let qIndex = Math.floor(Math.random() * availableQuestions.length);
+            let q = availableQuestions[qIndex]; availableQuestions.splice(qIndex, 1);
+            activeEvent = { type: 'trap', tx: tx, ty: ty, px: px, py: py }; 
+            const dialog = document.getElementById('dialog'); dialog.style.display = 'block';
+            document.getElementById('dialog-text').innerHTML = `⚠️ 踩到陷阱了！<br>請問 <strong>「${q.zh}」</strong> 的台語怎麼念？`;
+            let options = [{ text: q.taigi, correct: true }, { text: q.wrong1, correct: false }, { text: q.wrong2, correct: false }].sort(() => Math.random() - 0.5);
+            let html = ""; options.forEach(opt => { html += `<button class="ans-btn" onclick="checkAnswer(${opt.correct})">${opt.text}</button>`; });
+            document.getElementById('options').innerHTML = html;
+        }
+
+        function startMonsterBattle(monsterInfo) {
+            gameState = 'DIALOG'; activeEvent = { type: 'monster', monster: monsterInfo };
+            const dialog = document.getElementById('dialog'); dialog.style.display = 'block';
+            document.getElementById('dialog-text').innerHTML = `被 <strong>${monsterInfo.emoji}</strong> 抓到了！<br>喊出 <strong>「${monsterInfo.zh}」</strong> 的台語擊退牠：`;
+            let options = [{ text: monsterInfo.taigi, correct: true }, { text: monsterInfo.wrong1, correct: false }, { text: monsterInfo.wrong2, correct: false }].sort(() => Math.random() - 0.5);
+            let html = ""; options.forEach(opt => { html += `<button class="ans-btn" onclick="checkAnswer(${opt.correct})">${opt.text}</button>`; });
+            document.getElementById('options').innerHTML = html;
+        }
+
+        function startBossEvent() {
+            gameState = 'DIALOG'; activeEvent = { type: 'boss' };
+            const dialog = document.getElementById('dialog'); dialog.style.display = 'block';
+            document.getElementById('dialog-text').innerHTML = 
+                `<span style="color:#f1c40f">【太歲星君】</span> 降臨！<br><br>
+                「少年家，若看見有人欺負流浪狗，你該按怎做？」`;
+            let options = [
+                { text: "阻止伊並通報大人", correct: true }, { text: "假做無看見", correct: false }, { text: "做伙欺負", correct: false }
+            ].sort(() => Math.random() - 0.5);
+            let html = ""; options.forEach(opt => { html += `<button class="ans-btn" style="font-size:16px;" onclick="checkAnswer(${opt.correct})">${opt.text}</button>`; });
+            document.getElementById('options').innerHTML = html;
+        }
+
+        window.acceptStarlight = function() {
+            document.getElementById('dialog').style.display = 'none'; sfxTransform();
+            let overlay = document.getElementById('flash-overlay'); overlay.style.opacity = 1;
+            setTimeout(() => { isTransformed = true; overlay.style.opacity = 0; }, 500);
+            setTimeout(() => { showEndScreen(true); }, 3500);
+        }
+
+        window.checkAnswer = function(isCorrect) {
+            if(activeEvent.type === 'trap') {
+                if(isCorrect) {
+                    sfxCorrect(); alert(`✨ 答對了！陷阱被拆除了！`); levels[currentLvl].map[activeEvent.ty][activeEvent.tx] = 0; 
+                } else {
+                    sfxWrong(); alert("💥 答錯了！扣 20 滴血並彈回原位！"); player.hp -= 20; player.x = activeEvent.px; player.y = activeEvent.py; 
+                }
+            } else if (activeEvent.type === 'monster') {
+                if(isCorrect) {
+                    sfxCorrect(); alert(`✨ 答對了！怪物被你嚇跑了！`); activeEvent.monster.x = activeEvent.monster.startX; activeEvent.monster.y = activeEvent.monster.startY;
+                } else {
+                    sfxWrong(); alert("😈 念錯了！被怪物咬了一口，扣 30 滴血！"); player.hp -= 30;
+                }
+            } else if (activeEvent.type === 'boss') {
+                if(isCorrect) {
+                    document.getElementById('dialog').style.display = 'none'; triggerCoronation(); return; 
+                } else {
+                    sfxWrong(); alert("⚡ 神明搖搖頭：「品德猶未夠。」 扣 50 滴血！"); player.hp -= 50; player.y += 2; 
+                }
+            }
+
+            document.getElementById('hp').innerText = player.hp; document.getElementById('dialog').style.display = 'none';
+            if(player.hp <= 0) { triggerDeath(); } else { gameState = 'PLAYING'; }
+        }
+
+        function showEndScreen(isVictory) {
+            gameState = isVictory ? 'VICTORY_IDLE' : 'END';
+            document.getElementById('status-bar').style.display = 'none';
+            document.getElementById('dialog').style.display = 'none';
+            const endScreen = document.getElementById('end-screen'); endScreen.style.display = 'flex';
+            if(isVictory) {
+                document.getElementById('end-title').innerText = "🌌 銀河傳說 🌌"; document.getElementById('end-title').style.color = "#f1c40f";
+                document.getElementById('end-desc').innerHTML = "太神啦！你獲得了星光衫，<br>成為了最勇敢、最善良的台語英雄！";
+            } else {
+                canvas.style.display = 'none'; 
+                document.getElementById('end-title').innerText = "💀 挑戰失敗 💀"; document.getElementById('end-title').style.color = "#e74c3c";
+                document.getElementById('end-desc').innerHTML = "你的靈魂碎裂了...<br>保持決心 (Stay Determined)！";
+            }
+        }
+    </script>
+</body>
+</html>
